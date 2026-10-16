@@ -1,0 +1,20 @@
+# Python's automatic cache files
+__pycache__/
+*.py[cod]
+
+# Built ZIP files (made by scripts/build_zip.py; uploaded to GitHub Releases, not the code)
+dist/
+
+# Editor and operating-system clutter
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets: never commit passwords or keys
+.env
+*.env
+*.key
+
+# Data downloaded while testing
+SMART Imports/

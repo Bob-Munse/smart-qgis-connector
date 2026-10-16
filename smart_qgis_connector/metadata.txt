@@ -1,0 +1,22 @@
+[general]
+name=SMART QGIS Connector
+qgisMinimumVersion=3.16
+qgisMaximumVersion=4.99
+description=Import the results of SMART Connect queries into QGIS as map layers and tables
+about=Connects QGIS to a SMART Connect server (SMART conservation software). Sign in with your SMART Connect account, choose one of your saved queries and a date range, and the results are added to the map: patrol tracks as lines, observations as points, grid queries as polygons and summary queries as tables. Downloads are saved locally so layers keep working offline. Requires a SMART Connect account with access to saved queries. Not an official SMART product; SMART and the SMART logo belong to the SMART Partnership.
+version=0.6.0
+author=Chikuni Munsele Banda
+email=chikunirobert@gmail.com
+
+homepage=https://github.com/Bob-Munse/smart-qgis-connector
+tracker=https://github.com/Bob-Munse/smart-qgis-connector/issues
+repository=https://github.com/Bob-Munse/smart-qgis-connector
+
+tags=smart,smart connect,conservation,patrol,ranger,wildlife,protected areas,import,web
+category=Web
+icon=icons/icon.png
+experimental=True
+deprecated=False
+hasProcessingProvider=no
+
+changelog=0.6.0 - First release as SMART QGIS Connector: import saved SMART Connect queries (GeoJSON, shapefile or CSV) as layers; web-form sign-in with session handling; conservation area picker; searchable query list; date quick-picks; background downloads with Cancel; no server pre-filled, so any organisation can use it.
