@@ -12,7 +12,7 @@ homepage=https://github.com/Bob-Munse/smart-qgis-connector
 tracker=https://github.com/Bob-Munse/smart-qgis-connector/issues
 repository=https://github.com/Bob-Munse/smart-qgis-connector
 
-tags=smart,smart connect,conservation,patrol,ranger,wildlife,protected areas,import,web
+tags=smart,smart connect,conservation,data,patrol,ranger,wildlife,protected areas,biodiversity,monitoring,law enforcement,field data,geojson,shapefile,csv,api,import,web
 category=Web
 icon=icons/icon.png
 experimental=True
