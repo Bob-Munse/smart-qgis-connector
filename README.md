@@ -75,7 +75,7 @@ smart-qgis-connector/
 
 ```powershell
 New-Item -ItemType Junction `
-  -Path "$env:APPDATA\QGIS\QGIS3\profiles\default\python\plugins\smart_qgis_connector" `
+  -Path "$env:APPDATA\QGIS\QGIS4\profiles\default\python\plugins\smart_qgis_connector" `
   -Target "$HOME\Documents\GitHub\smart-qgis-connector\smart_qgis_connector"
 ```
 
