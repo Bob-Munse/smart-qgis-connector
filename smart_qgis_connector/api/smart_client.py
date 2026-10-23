@@ -38,6 +38,26 @@ LOGIN_FORM_ENDPOINT = "/server/j_security_check"
 # QGIS's normal limit is 60 seconds, which is too short for months of patrol tracks.
 DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000
 
+
+# ---- Custom queries (Build Query tab): no saved query needed ----
+# Waypoints with their observations, filtered by date. "patrol" = patrol observations
+# (each comes with its team, station, mandate...); "all" = every waypoint.
+CUSTOM_WAYPOINT_ENDPOINTS = {
+    "patrol": "/server/api/query/custom/waypoint/patrol",
+    "all": "/server/api/query/custom/waypoint",
+}
+
+# Teams, stations, mandates, transport types... (for the filter lists).
+PATROL_METADATA_ENDPOINT = "/server/api/metadata/patrol/{ca_uuid}"
+
+# The data model: every category and attribute (for the category tree).
+DATAMODEL_ENDPOINT = "/server/api/metadata/datamodel/{ca_uuid}"
+
+# The server sends at most this many records per request...
+CUSTOM_QUERY_LIMIT = 1000
+# ...so we ask for this many days at a time.
+CUSTOM_CHUNK_DAYS = 7
+
 # Which date fields each SMART query type can be filtered on.
 # The FIRST one in each list is the default the plugin picks.
 DATE_FILTERS_BY_QUERY_TYPE = {
@@ -306,6 +326,69 @@ def parse_set_cookie(header_value):
 # The client (needs QGIS for the actual network calls)
 # ---------------------------------------------------------------------------
 
+def date_chunks(start_date, end_date, days=CUSTOM_CHUNK_DAYS):
+    """
+    Split a date range into pieces of `days` days each (both ends included).
+      date_chunks("2026-10-01", "2026-10-20", 7)
+      -> [("2026-10-01", "2026-10-07"), ("2026-10-08", "2026-10-14"), ("2026-10-15", "2026-10-20")]
+    """
+    from datetime import date, timedelta
+
+    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    if end < start:
+        start, end = end, start          # forgive dates typed the wrong way round
+    chunks = []
+    while start <= end:
+        stop = min(start + timedelta(days=days - 1), end)
+        chunks.append((start.isoformat(), stop.isoformat()))
+        start = stop + timedelta(days=1)
+    return chunks
+
+
+def split_chunk(start_date, end_date):
+    """
+    Cut one date range in half, used when a piece hits the 1000-record limit.
+    Returns two ranges, or None if the range is a single day (can't be cut).
+      split_chunk("2026-10-01", "2026-10-07") -> (("2026-10-01", "2026-10-04"), ("2026-10-05", "2026-10-07"))
+    """
+    from datetime import date, timedelta
+
+    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    if start >= end:
+        return None
+    middle = start + (end - start) // 2
+    return (start.isoformat(), middle.isoformat()), ((middle + timedelta(days=1)).isoformat(), end.isoformat())
+
+
+def build_custom_waypoint_path(source, start_date, end_date):
+    """
+    The address that asks for waypoints (with their observations) between two dates.
+    source is "patrol" (patrol observations, with team/mandate) or "all" (every waypoint).
+    """
+    endpoint = CUSTOM_WAYPOINT_ENDPOINTS[source]
+    return f"{endpoint}?waypoint_date={start_date}:{end_date}"
+
+
+def parse_feature_list(body):
+    """
+    Turn the server's answer into a Python list of features.
+    It may be a plain list [...] or a GeoJSON {"features": [...]}.
+    Raises ValueError if it isn't JSON at all.
+    """
+    import json
+
+    data = json.loads(body.decode("utf-8"))
+    if isinstance(data, dict):
+        data = data.get("features", [])
+    return data if isinstance(data, list) else []
+
+
+def feature_key(feature):
+    """A unique ID for one waypoint, so pieces that overlap never give duplicates."""
+    props = feature.get("properties") or {}
+    waypoint = props.get("waypoint") or {}
+    return waypoint.get("uuid") or props.get("fid") or id(feature)
+
 class SmartConnectClient:
     """Holds one set of connection details and makes requests with them."""
 
@@ -514,3 +597,89 @@ class SmartConnectClient:
         if len(attempts) > 1:
             last_error = last_error.rstrip(".") + f" (tried {len(log)} ways)."
         return "", last_body, last_error, log
+
+
+    def fetch_custom_waypoints(self, source, start_date, end_date, feedback=None, progress=None):
+        """
+        Run a CUSTOM query (no saved query needed): every waypoint, with its
+        observations, between start_date and end_date ("YYYY-MM-DD", both included).
+
+        source   -- "patrol" (patrol observations) or "all" (every waypoint)
+        feedback -- a QgsFeedback, so a Cancel button can stop it
+        progress -- optional function progress(pieces_done, pieces_total, message)
+
+        The server returns at most 1000 records per request, so the dates are
+        fetched in 7-day pieces. A piece that comes back FULL is cut in half
+        and fetched again, until every piece is under the limit.
+
+        Returns (features, error_message, log). On success error_message is "".
+        """
+        queue = date_chunks(start_date, end_date)     # pieces still to fetch
+        features = {}                                 # waypoint ID -> feature (no duplicates)
+        log = []
+        done = 0
+
+        while queue:
+            if feedback is not None and feedback.isCanceled():
+                return [], "Query cancelled.", log + ["Cancelled by user."]
+
+            piece_start, piece_end = queue.pop(0)
+            if progress:
+                progress(done, done + len(queue) + 1, f"Fetching {piece_start} to {piece_end}…")
+
+            path = build_custom_waypoint_path(source, piece_start, piece_end)
+            status, body, error = self.get(path, timeout_ms=DOWNLOAD_TIMEOUT_MS, feedback=feedback)
+            if status != 200:
+                message = interpret_response(status, error)[1]
+                log.append(f"{piece_start} to {piece_end}: HTTP {status or 'no reply'}")
+                return [], message, log
+            try:
+                batch = parse_feature_list(body)
+            except (ValueError, UnicodeDecodeError):
+                log.append(f"{piece_start} to {piece_end}: answer was not JSON")
+                return [], "The server's answer wasn't in the expected format.", log
+
+            # Hit the limit? Then some records are missing: cut the piece in half and retry.
+            if len(batch) >= CUSTOM_QUERY_LIMIT:
+                halves = split_chunk(piece_start, piece_end)
+                if halves:
+                    log.append(f"{piece_start} to {piece_end}: {len(batch)} records (limit reached), splitting")
+                    queue[0:0] = list(halves)          # fetch the two halves next
+                    continue
+                log.append(f"{piece_start}: {len(batch)} records on ONE day - the server limit, some may be missing")
+
+            for feature in batch:
+                features[feature_key(feature)] = feature
+            done += 1
+            log.append(f"{piece_start} to {piece_end}: {len(batch)} records")
+
+        if progress:
+            progress(done, done, "Download finished.")
+        return list(features.values()), "", log
+
+    def get_patrol_metadata(self, ca_uuid):
+        """
+        Teams, stations, mandates, transport types... for the filter lists.
+        Returns (metadata_dict, error_message).
+        """
+        import json
+
+        status, body, error = self.get(PATROL_METADATA_ENDPOINT.format(ca_uuid=ca_uuid))
+        if status != 200:
+            return {}, interpret_response(status, error)[1]
+        try:
+            return json.loads(body.decode("utf-8")), ""
+        except (ValueError, UnicodeDecodeError):
+            return {}, "The patrol settings from the server weren't in the expected format."
+
+    def get_datamodel_xml(self, ca_uuid):
+        """
+        The conservation area's data model (all categories and attributes), as XML text.
+        Returns (xml_bytes, error_message).
+        """
+        status, body, error = self.get(
+            DATAMODEL_ENDPOINT.format(ca_uuid=ca_uuid), accept=b"application/xml", timeout_ms=DOWNLOAD_TIMEOUT_MS
+        )
+        if status != 200:
+            return b"", interpret_response(status, error)[1]
+        return body, ""
